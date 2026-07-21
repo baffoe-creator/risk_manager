@@ -24,6 +24,7 @@ class Session:
     def start(self):
         """Start a new session."""
         self.start_time = datetime.now()
+        self.end_time = None
         self.active = True
         self.trade_count = 0
         self.max_position_size = 0.0
@@ -35,6 +36,10 @@ class Session:
     
     def end(self) -> dict:
         """End the session and return summary data."""
+        if not self.active:
+            logger.warning("Attempted to end an inactive session")
+            return {}
+        
         self.end_time = datetime.now()
         self.active = False
         logger.info(f"Session ended at {self.end_time}")
@@ -68,15 +73,16 @@ class Session:
         
         return False
     
-    def update_trade_state(self, pnl: float, position_size: float, trade_count: int):
+    def update_trade_stats(self, pnl: float, position_size: float):
         """Update trade statistics."""
         if not self.active:
             logger.warning("Attempted to update inactive session")
             return
         
         self.sum_pnl += pnl
-        self.trade_count = trade_count
+        self.trade_count += 1
         self.max_position_size = max(self.max_position_size, position_size)
+        logger.debug(f"Trade stats updated: PnL={self.sum_pnl:.2f}, trades={self.trade_count}, max_pos={self.max_position_size:.2f}")
     
     def get_summary(self) -> dict:
         """Get session summary for saving."""
@@ -96,3 +102,15 @@ class Session:
             "discipline_score": None,
             "session_grade": None
         }
+    
+    def get_cooldown_remaining(self) -> Optional[int]:
+        """Get remaining cooldown time in seconds."""
+        if not self.cooldown_active or self.cooldown_ends_at is None:
+            return 0
+        
+        remaining = (self.cooldown_ends_at - datetime.now()).total_seconds()
+        if remaining <= 0:
+            self.cooldown_active = False
+            return 0
+        
+        return int(remaining)

@@ -5,21 +5,33 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
+try:
+    from src.path_helper import get_database_path
+except ImportError:
+    def get_database_path():
+        return Path("database/trader_rules.db")
+
 logger = logging.getLogger(__name__)
 
 
 class DataManager:
     """Handles all database operations for the Risk Manager."""
     
+    _default_db_path = None
+    
     def __init__(self, db_path: Optional[Path] = None):
         """Initialize database connection and create tables if needed."""
         if db_path is None:
-            db_path = Path(__file__).parent.parent.parent / "database" / "trader_rules.db"
+            if DataManager._default_db_path:
+                db_path = DataManager._default_db_path
+            else:
+                db_path = get_database_path()
         
         self.db_path = db_path
-        self.db_path.parent.mkdir(exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
         self._init_db()
+        self._seed_default_settings()
     
     def _init_db(self):
         """Create tables if they don't exist."""
@@ -27,7 +39,6 @@ class DataManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Create settings table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS settings (
                         id INTEGER PRIMARY KEY,
@@ -36,7 +47,6 @@ class DataManager:
                     )
                 """)
                 
-                # Create sessions table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS sessions (
                         id INTEGER PRIMARY KEY,
@@ -54,11 +64,35 @@ class DataManager:
                 """)
                 
                 conn.commit()
-                logger.info("Database initialized successfully")
+                logger.info(f"Database initialized at {self.db_path}")
                 
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
+    
+    def _seed_default_settings(self):
+        """Seed default settings on first run."""
+        defaults = {
+            "daily_loss_limit": "1000.0",
+            "max_contract_size": "10.0",
+            "max_trades_per_day": "20",
+            "trading_cutoff_time": "16:00",
+            "consecutive_loss_limit": "5",
+            "cooldown_period_minutes": "30",
+            "rule_severity_map": json.dumps({
+                "daily_loss_limit": "major",
+                "max_contract_size": "major",
+                "max_trades_per_day": "minor",
+                "trading_cutoff_time": "minor",
+                "consecutive_loss_limit": "major",
+                "cooldown_period_minutes": "minor"
+            })
+        }
+        
+        for key, value in defaults.items():
+            if self.get_setting(key) is None:
+                self.save_setting(key, value)
+                logger.info(f"Seeded default setting: {key} = {value}")
     
     def get_setting(self, key: str) -> Optional[str]:
         """Get a setting value by key."""
@@ -105,19 +139,20 @@ class DataManager:
     def save_session(self, session_data: dict) -> Optional[int]:
         """Save a session and return its ID."""
         try:
-            # Convert rule_violations to JSON if it's a list
-            if "rule_violations" in session_data and isinstance(session_data["rule_violations"], list):
-                session_data["rule_violations"] = json.dumps(session_data["rule_violations"])
+            data_copy = session_data.copy()
+            
+            if "rule_violations" in data_copy and isinstance(data_copy["rule_violations"], list):
+                data_copy["rule_violations"] = json.dumps(data_copy["rule_violations"])
             
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                columns = list(session_data.keys())
+                columns = list(data_copy.keys())
                 placeholders = ", ".join(["?"] * len(columns))
                 columns_str = ", ".join(columns)
                 
                 query = f"INSERT INTO sessions ({columns_str}) VALUES ({placeholders})"
-                cursor.execute(query, list(session_data.values()))
+                cursor.execute(query, list(data_copy.values()))
                 
                 session_id = cursor.lastrowid
                 conn.commit()
@@ -125,7 +160,7 @@ class DataManager:
                 logger.info(f"Saved session with ID: {session_id}")
                 return session_id
                 
-        except (sqlite3.Error, json.JSONEncodeError) as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
             logger.error(f"Failed to save session: {e}")
             return None
     
@@ -142,13 +177,16 @@ class DataManager:
                 sessions = []
                 for row in rows:
                     session_dict = dict(row)
-                    # Decode rule_violations from JSON if present
                     if "rule_violations" in session_dict and session_dict["rule_violations"]:
                         try:
                             session_dict["rule_violations"] = json.loads(session_dict["rule_violations"])
                         except json.JSONDecodeError:
-                            logger.warning(f"Failed to decode rule_violations for session {session_dict.get('id')}")
+                            logger.warning(
+                                f"Failed to decode rule_violations for session {session_dict.get('id')}"
+                            )
                             session_dict["rule_violations"] = []
+                    else:
+                        session_dict["rule_violations"] = []
                     sessions.append(session_dict)
                 
                 return sessions
@@ -156,27 +194,3 @@ class DataManager:
         except sqlite3.Error as e:
             logger.error(f"Failed to get session history: {e}")
             return []
-    
-    def seed_default_settings(self):
-        """Seed default settings on first run."""
-        defaults = {
-            "daily_loss_limit": "1000.0",
-            "max_contract_size": "10.0",
-            "max_trades_per_day": "20",
-            "trading_cutoff_time": "16:00",
-            "consecutive_loss_limit": "5",
-            "cooldown_period_minutes": "30",
-            "rule_severity_map": json.dumps({
-                "daily_loss_limit": "major",
-                "max_contract_size": "major",
-                "max_trades_per_day": "minor",
-                "trading_cutoff_time": "minor",
-                "consecutive_loss_limit": "major",
-                "cooldown_period_minutes": "minor"
-            })
-        }
-        
-        for key, value in defaults.items():
-            if self.get_setting(key) is None:
-                self.save_setting(key, value)
-                logger.info(f"Seeded default setting: {key} = {value}")

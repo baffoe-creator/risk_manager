@@ -1,11 +1,11 @@
 customtkinter
 pytest
-
-# Milestone 3 dependencies (not installed yet)
-# pytesseract
-# opencv-python
-# mss
-# pygetwindow
+numpy
+pillow
+opencv-python
+pytesseract
+mss
+pygetwindow
 
 # Phase 8 - Packaging (dev only)
-# pyinstaller
+pyinstaller
